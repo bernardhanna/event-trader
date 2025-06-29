@@ -77,7 +77,7 @@ Return JSON ONLY with:
 Return {} if no trade.
 """
 
-# DB
+# SQLite
 DB = sqlite3.connect("events.db", check_same_thread=False)
 DB.execute("""
 CREATE TABLE IF NOT EXISTS events (
@@ -145,12 +145,12 @@ def gemini_json(prompt: str) -> dict:
     if not gemini_model:
         return {}
     try:
-        response = gemini_model.generate_content(prompt)
+        response = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
         content = getattr(response, "text", None)
         if not content or not content.strip():
             print("Gemini returned empty content.")
             return {}
-        print(f"Gemini raw content:\n{content[:200]}...")  # show only first 200 chars
+        print(f"Gemini raw content:\n{content[:200]}...")
         try:
             return json.loads(content)
         except json.JSONDecodeError:
@@ -158,17 +158,6 @@ def gemini_json(prompt: str) -> dict:
             return {}
     except Exception as e:
         print(f"Gemini API/network error: {e}")
-        return {}
-    if not gemini_model:
-        return {}
-    try:
-        response = gemini_model.generate_content(prompt)
-        content = getattr(response, "text", None)
-        if not content:
-            return {}
-        return json.loads(content)
-    except Exception as e:
-        print(f"Gemini error: {e}")
         return {}
 
 def pos_size(conf):
@@ -255,6 +244,6 @@ if __name__ == "__main__":
         heartbeat_counter += 1
         if heartbeat_counter >= 6:
             if not found:
-                tg("✅ *EventTrader heartbeat*: no signals found, system OK.")
+                tg("✅ *EventTrader heartbeat*: no signals found, system running normally.")
             heartbeat_counter = 0
         time.sleep(600)
