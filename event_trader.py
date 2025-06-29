@@ -3,6 +3,7 @@
 import os
 import time
 import json
+import re
 import hashlib
 import sqlite3
 import feedparser
@@ -61,7 +62,7 @@ FEEDS = [
     "https://www.aljazeera.com/xml/rss/all.xml",
 ]
 
-# Event Prompt
+# Prompt
 EVENT_PROMPT = """
 You are a professional event-driven trading analyst.
 Given a HEADLINE and SUMMARY, decide if there is a trading opportunity.
@@ -145,16 +146,22 @@ def gemini_json(prompt: str) -> dict:
     if not gemini_model:
         return {}
     try:
-        response = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+        response = gemini_model.generate_content(prompt)
         content = getattr(response, "text", None)
         if not content or not content.strip():
             print("Gemini returned empty content.")
             return {}
-        print(f"Gemini raw content:\n{content[:200]}...")
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            print(f"Gemini returned invalid JSON:\n{content}")
+        print(f"Gemini raw content:\n{content[:300]}...")
+        # extract JSON from within markdown or other text using regex
+        match = re.search(r"\{.*?\}", content, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error from Gemini: {e}")
+                return {}
+        else:
+            print("No JSON block found in Gemini response.")
             return {}
     except Exception as e:
         print(f"Gemini API/network error: {e}")
@@ -237,13 +244,13 @@ def process():
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.6] running with event_type tagging")
+    print("[EventTrader v0.6] running with event_type tagging and Gemini JSON extraction")
     heartbeat_counter = 0
     while True:
         found = process()
         heartbeat_counter += 1
         if heartbeat_counter >= 6:
             if not found:
-                tg("✅ *EventTrader heartbeat*: no signals found, system running normally.")
+                tg("✅ *EventTrader heartbeat*: no signals found, system OK.")
             heartbeat_counter = 0
         time.sleep(600)
