@@ -1,0 +1,9 @@
+date,symbol,side,pnl_pct,reason,category,exit_reason
+2024-03-10T00:00:00Z,TSLA,short,-8.268904173948211,Regulatory risk,corporate,stop-loss
+2024-02-01T00:00:00Z,USO,long,-7.122879810462352,Supply disruption,geopolitical,stop-loss
+2024-02-01T00:00:00Z,BNO,long,-6.383634553418867,Supply disruption,geopolitical,stop-loss
+2024-05-05T00:00:00Z,EWJ,short,-3.0526976514416475,Supply chain disruption,natural disaster,stop-loss
+2024-05-05T00:00:00Z,DXJ,short,-2.8475917906426713,Supply chain disruption,natural disaster,close
+2024-06-15T00:00:00Z,SPY,short,-3.2284093464848214,Economic weakness,macroeconomic,stop-loss
+2024-06-15T00:00:00Z,QQQ,short,-3.3731154088325286,Economic weakness,macroeconomic,stop-loss
+2024-06-15T00:00:00Z,IWM,short,-2.7808261391761726,Economic weakness,macroeconomic,close

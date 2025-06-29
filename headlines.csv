@@ -1,0 +1,5 @@
+headline,summary,assets,direction,confidence,reason,category,timestamp
+"Tesla shares drop after Musk","Regulatory concerns","[""TSLA""]","short",85,"Regulatory risk","corporate","2024-03-10T00:00:00Z"
+"Explosion at Saudi terminal","Disrupts 1 million barrels","[""USO"",""BNO""]","long",80,"Supply disruption","geopolitical","2024-02-01T00:00:00Z"
+"Massive earthquake hits Japan","Production halted","[""EWJ"",""DXJ""]","short",78,"Supply chain disruption","natural disaster","2024-05-05T00:00:00Z"
+"US unemployment rises","Signals weakness","[""SPY"",""QQQ"",""IWM""]","short",70,"Economic weakness","macroeconomic","2024-06-15T00:00:00Z"
