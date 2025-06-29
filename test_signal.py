@@ -1,23 +1,23 @@
-# test_signal.py
-
-from event_trader import mark_event, pos_size, place_trade, tg
+from event_trader import mark_event, pos_size, place_trade, tg, sha
 
 test_evt = {
     "event": "Test Event",
     "assets_affected": ["AAPL"],
     "direction": "short",
     "confidence": 95,
-    "reason": "Testing manual injection"
+    "reason": "Testing manual injection",
+    "event_type": "other"
 }
 
 # Mark the event in the DB/log
 mark_event(
-    123,    # <-- use an integer, not a string
+    sha("Manual Test"),   # consistent event ID
     "Manual Test",
     "Testing summary",
     test_evt['confidence'],
     test_evt['direction'],
-    test_evt['reason']
+    test_evt['reason'],
+    test_evt['event_type']
 )
 
 # Calculate size
