@@ -52,7 +52,7 @@ else:
 # Config
 TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
-CONF_THRESHOLD = 80
+CONF_THRESHOLD = 70   # lowered from 80
 EURUSD_FX_RATE = 1.08
 
 # Feeds
@@ -244,7 +244,7 @@ def process():
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.6] running with event_type tagging and Gemini JSON extraction")
+    print("[EventTrader v0.6] running with event_type tagging and Gemini JSON extraction (CONF_THRESHOLD 70)")
     heartbeat_counter = 0
     while True:
         found = process()
