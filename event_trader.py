@@ -1,3 +1,5 @@
+# event_trader.py
+
 import os
 import time
 import json
@@ -53,33 +55,30 @@ MAX_POSITION_PCT = 0.05
 CONF_THRESHOLD = 70
 EURUSD_FX_RATE = 1.08
 
-# Feeds
+# Expanded Feeds
 FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    # finance/defense
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://www.cnbc.com/id/15839135/device/rss/rss.html",
-    "https://www.marketwatch.com/rss/topstories",
-    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC",
-    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AI",
-    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=RTX",
-    "https://www.defensenews.com/flashpoints/rss",
+    "https://www.ft.com/?format=rss",
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://cryptopotato.com/feed/",
+    "https://finance.yahoo.com/news/rss/"
 ]
 
-# Keywords
-KEYWORDS = [
-    "defense", "military", "nato", "ai", "artificial intelligence",
-    "robotics", "drone", "cybersecurity", "flying taxi", "evtol",
-    "space", "satellite", "semiconductor", "chip", "nvidia"
+# Priority keywords (including crypto)
+PRIORITY_KEYWORDS = [
+    "flying taxi", "eVTOL", "artificial intelligence", "AI", "semiconductor",
+    "NVIDIA", "defense stocks", "military spending", "Boeing", "RTX", "Leonardo",
+    "bitcoin", "ethereum", "blockchain", "stablecoin", "web3", "DeFi", "crypto",
+    "CBDC", "Solana", "NFT", "Coinbase", "Binance", "FTX", "SEC crypto"
 ]
 
 # Prompt
 EVENT_PROMPT = """
 You are a professional event-driven trading analyst.
 Given a HEADLINE and SUMMARY, decide if there is a trading opportunity.
-Pay extra attention if the story relates to: defense, AI, robotics, military, cybersecurity, flying taxis, or semiconductors.
 Return JSON ONLY with:
 {
   "event": ...,
@@ -165,16 +164,15 @@ def gemini_json(prompt: str) -> dict:
         if not content or not content.strip():
             print("Gemini returned empty content.")
             return {}
-        print(f"Gemini raw content:\n{content[:300]}...")
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group(0))
             except json.JSONDecodeError as e:
-                print(f"Gemini JSON decode error: {e}")
+                print(f"Gemini JSON error: {e}")
                 return {}
         else:
-            print("No JSON block found in Gemini response.")
+            print("No JSON found in Gemini response")
             return {}
     except Exception as e:
         print(f"Gemini error: {e}")
@@ -228,54 +226,38 @@ def place_trade(ticker, direction, size_eur):
 def process():
     found = False
     for title, summary in fetch_news():
-        priority_hit = any(kw in title.lower() for kw in KEYWORDS)
-        if priority_hit:
-            print(f"🚀 Priority keyword match found: {title}")
-
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
+        if any(keyword.lower() in title.lower() for keyword in PRIORITY_KEYWORDS):
+            print(f"🚀 Priority keyword match found: {title}")
         evt = gpt_json(EVENT_PROMPT, user_msg)
-
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
             evt = gemini_json(f"{EVENT_PROMPT}\n\n{user_msg}")
-
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
             continue
-
         uid = sha(title)
         if seen(uid):
             continue
-
         mark_event(uid, title, summary, evt['confidence'], evt['direction'], evt['reason'], evt.get("event_type", "other"))
-
         size = pos_size(evt['confidence'])
-        region_note = ""
-
-        if not any(keyword in title.lower() for keyword in ["us", "america", "europe", "germany", "france", "uk"]):
-            region_note = "⚠️ research only — non-US/EU"
-
         msg = (
             f"🔥 *Event Signal* ({evt['confidence']}%)\n"
             f"*Headline:* {title}\n"
             f"*Type:* {evt.get('event_type', 'other')}\n"
             f"*Direction:* {evt['direction']}\n"
             f"*Reason:* {evt['reason']}\n"
-            f"*Size:* €{size}\n"
-            f"{region_note}"
+            f"*Size:* €{size}"
         )
-
         for asset in evt.get("assets_affected", []):
             msg += f"\n*Asset:* `{asset}`"
             if TRADE_ENABLED:
                 success, oid = place_trade(asset, evt['direction'], size)
                 msg += f"\nExec: {'✅' if success else '❌'}"
-
         tg(msg)
         found = True
-
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.7] running with expanded feeds + keywords + regional priority")
+    print("[EventTrader v0.7] running with expanded crypto + priority keywords")
     heartbeat_counter = 0
     while True:
         found = process()
