@@ -1,5 +1,3 @@
-# event_trader.py
-
 import os
 import time
 import json
@@ -53,7 +51,6 @@ else:
 TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
 CONF_THRESHOLD = 70
-HIGH_PRIORITY = 80
 EURUSD_FX_RATE = 1.08
 
 # Feeds
@@ -61,7 +58,8 @@ FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://cryptonews.com/news/feed",  # crypto
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://www.investing.com/rss/news_25.rss",
 ]
 
 # Prompt
@@ -95,18 +93,15 @@ CREATE TABLE IF NOT EXISTS events (
 )
 """)
 DB.execute("""
-CREATE TABLE IF NOT EXISTS positions (
-    id TEXT PRIMARY KEY,
-    asset TEXT,
-    direction TEXT,
-    size REAL,
-    confidence INTEGER,
-    status TEXT,
-    opened_at TEXT,
-    closed_at TEXT
+CREATE TABLE IF NOT EXISTS novelty (
+    keyword TEXT PRIMARY KEY,
+    timestamp TEXT
 )
 """)
 DB.commit()
+
+# Weak signals
+WEAK_TERMS = ["ongoing", "aftermath", "continued", "renewed clashes", "minor"]
 
 def sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
@@ -114,29 +109,15 @@ def sha(text):
 def seen(uid):
     return DB.execute("SELECT 1 FROM events WHERE id=?", (uid,)).fetchone() is not None
 
-def position_exists(asset):
-    return DB.execute(
-        "SELECT direction FROM positions WHERE asset=? AND status='open'",
-        (asset,)
-    ).fetchone()
-
-def open_position(uid, asset, direction, size, confidence):
-    DB.execute("""
-        INSERT INTO positions
-        (id, asset, direction, size, confidence, status, opened_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        uid, asset, direction, size, confidence, 'open', dt.utcnow().isoformat()
-    ))
+def is_novel(keyword):
+    row = DB.execute("SELECT timestamp FROM novelty WHERE keyword=?", (keyword,)).fetchone()
+    if row:
+        ts = dt.fromisoformat(row[0])
+        if (dt.utcnow() - ts).total_seconds() < 86400:
+            return False
+    DB.execute("INSERT OR REPLACE INTO novelty (keyword, timestamp) VALUES (?, ?)", (keyword, dt.utcnow().isoformat()))
     DB.commit()
-
-def close_position(asset):
-    DB.execute("""
-        UPDATE positions
-        SET status='closed', closed_at=?
-        WHERE asset=? AND status='open'
-    """, (dt.utcnow().isoformat(), asset))
-    DB.commit()
+    return True
 
 def mark_event(uid, headline, summary, confidence, direction, reason, event_type):
     DB.execute("""
@@ -160,6 +141,11 @@ def fetch_news():
                 if hasattr(e, "published_parsed") and e.published_parsed:
                     published_time = dt(*e.published_parsed[:6])
                 if (dt.utcnow() - published_time).total_seconds() > 3600:
+                    continue
+                if any(weak in e.title.lower() for weak in WEAK_TERMS):
+                    continue
+                keyword = e.title.lower().split(" ")[0]
+                if not is_novel(keyword):
                     continue
                 yield e.title, getattr(e, "summary", "")
         except Exception as e:
@@ -187,14 +173,11 @@ def gemini_json(prompt: str) -> dict:
         response = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
         content = getattr(response, "text", None)
         if not content or not content.strip():
-            print("Gemini returned empty content.")
             return {}
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         if match:
             return json.loads(match.group(0))
-        else:
-            print("Gemini no JSON found")
-            return {}
+        return {}
     except Exception as e:
         print(f"Gemini error: {e}")
         return {}
@@ -256,38 +239,27 @@ def process():
         uid = sha(title)
         if seen(uid):
             continue
-        symbol_prefix = "🔥" if evt['confidence'] >= HIGH_PRIORITY else "⚠️"
-        note = ""
-        for asset in evt.get("assets_affected", []):
-            existing_pos = position_exists(asset)
-            if existing_pos:
-                if existing_pos[0] != evt["direction"]:
-                    note += f"\n⚠️ Opposite signal to existing open position on {asset}. Consider closing."
-                    close_position(asset)
         mark_event(uid, title, summary, evt['confidence'], evt['direction'], evt['reason'], evt.get("event_type", "other"))
         size = pos_size(evt['confidence'])
         msg = (
-            f"{symbol_prefix} *Event Signal* ({evt['confidence']}%)\n"
+            f"🔥 *Event Signal* ({evt['confidence']}%)\n"
             f"*Headline:* {title}\n"
             f"*Type:* {evt.get('event_type', 'other')}\n"
             f"*Direction:* {evt['direction']}\n"
             f"*Reason:* {evt['reason']}\n"
             f"*Size:* €{size}"
-            f"{note}"
         )
         for asset in evt.get("assets_affected", []):
             msg += f"\n*Asset:* `{asset}`"
             if TRADE_ENABLED:
                 success, oid = place_trade(asset, evt['direction'], size)
                 msg += f"\nExec: {'✅' if success else '❌'}"
-                if success:
-                    open_position(uid, asset, evt['direction'], size, evt['confidence'])
         tg(msg)
         found = True
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.7] running with position tracking, priority tagging, and opposite-signal detection")
+    print("[EventTrader v0.7] running with recency + novelty + weak filter")
     heartbeat_counter = 0
     while True:
         found = process()
