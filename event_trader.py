@@ -53,26 +53,15 @@ else:
 TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
 CONF_THRESHOLD = 70
+HIGH_PRIORITY = 80
 EURUSD_FX_RATE = 1.08
 
-# Expanded Feeds
+# Feeds
 FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://www.ft.com/?format=rss",
-    "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://cryptopotato.com/feed/",
-    "https://finance.yahoo.com/news/rss/"
-]
-
-# Priority keywords (including crypto)
-PRIORITY_KEYWORDS = [
-    "flying taxi", "eVTOL", "artificial intelligence", "AI", "semiconductor",
-    "NVIDIA", "defense stocks", "military spending", "Boeing", "RTX", "Leonardo",
-    "bitcoin", "ethereum", "blockchain", "stablecoin", "web3", "DeFi", "crypto",
-    "CBDC", "Solana", "NFT", "Coinbase", "Binance", "FTX", "SEC crypto"
+    "https://cryptonews.com/news/feed",  # crypto
 ]
 
 # Prompt
@@ -105,6 +94,18 @@ CREATE TABLE IF NOT EXISTS events (
     timestamp TEXT
 )
 """)
+DB.execute("""
+CREATE TABLE IF NOT EXISTS positions (
+    id TEXT PRIMARY KEY,
+    asset TEXT,
+    direction TEXT,
+    size REAL,
+    confidence INTEGER,
+    status TEXT,
+    opened_at TEXT,
+    closed_at TEXT
+)
+""")
 DB.commit()
 
 def sha(text):
@@ -112,6 +113,30 @@ def sha(text):
 
 def seen(uid):
     return DB.execute("SELECT 1 FROM events WHERE id=?", (uid,)).fetchone() is not None
+
+def position_exists(asset):
+    return DB.execute(
+        "SELECT direction FROM positions WHERE asset=? AND status='open'",
+        (asset,)
+    ).fetchone()
+
+def open_position(uid, asset, direction, size, confidence):
+    DB.execute("""
+        INSERT INTO positions
+        (id, asset, direction, size, confidence, status, opened_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        uid, asset, direction, size, confidence, 'open', dt.utcnow().isoformat()
+    ))
+    DB.commit()
+
+def close_position(asset):
+    DB.execute("""
+        UPDATE positions
+        SET status='closed', closed_at=?
+        WHERE asset=? AND status='open'
+    """, (dt.utcnow().isoformat(), asset))
+    DB.commit()
 
 def mark_event(uid, headline, summary, confidence, direction, reason, event_type):
     DB.execute("""
@@ -159,20 +184,16 @@ def gemini_json(prompt: str) -> dict:
     if not gemini_model:
         return {}
     try:
-        response = gemini_model.generate_content(prompt)
+        response = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
         content = getattr(response, "text", None)
         if not content or not content.strip():
             print("Gemini returned empty content.")
             return {}
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError as e:
-                print(f"Gemini JSON error: {e}")
-                return {}
+            return json.loads(match.group(0))
         else:
-            print("No JSON found in Gemini response")
+            print("Gemini no JSON found")
             return {}
     except Exception as e:
         print(f"Gemini error: {e}")
@@ -227,8 +248,6 @@ def process():
     found = False
     for title, summary in fetch_news():
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
-        if any(keyword.lower() in title.lower() for keyword in PRIORITY_KEYWORDS):
-            print(f"🚀 Priority keyword match found: {title}")
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
             evt = gemini_json(f"{EVENT_PROMPT}\n\n{user_msg}")
@@ -237,27 +256,38 @@ def process():
         uid = sha(title)
         if seen(uid):
             continue
+        symbol_prefix = "🔥" if evt['confidence'] >= HIGH_PRIORITY else "⚠️"
+        note = ""
+        for asset in evt.get("assets_affected", []):
+            existing_pos = position_exists(asset)
+            if existing_pos:
+                if existing_pos[0] != evt["direction"]:
+                    note += f"\n⚠️ Opposite signal to existing open position on {asset}. Consider closing."
+                    close_position(asset)
         mark_event(uid, title, summary, evt['confidence'], evt['direction'], evt['reason'], evt.get("event_type", "other"))
         size = pos_size(evt['confidence'])
         msg = (
-            f"🔥 *Event Signal* ({evt['confidence']}%)\n"
+            f"{symbol_prefix} *Event Signal* ({evt['confidence']}%)\n"
             f"*Headline:* {title}\n"
             f"*Type:* {evt.get('event_type', 'other')}\n"
             f"*Direction:* {evt['direction']}\n"
             f"*Reason:* {evt['reason']}\n"
             f"*Size:* €{size}"
+            f"{note}"
         )
         for asset in evt.get("assets_affected", []):
             msg += f"\n*Asset:* `{asset}`"
             if TRADE_ENABLED:
                 success, oid = place_trade(asset, evt['direction'], size)
                 msg += f"\nExec: {'✅' if success else '❌'}"
+                if success:
+                    open_position(uid, asset, evt['direction'], size, evt['confidence'])
         tg(msg)
         found = True
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.7] running with expanded crypto + priority keywords")
+    print("[EventTrader v0.7] running with position tracking, priority tagging, and opposite-signal detection")
     heartbeat_counter = 0
     while True:
         found = process()
