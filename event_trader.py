@@ -1,5 +1,3 @@
-# event_trader.py
-
 import os
 import time
 import json
@@ -60,11 +58,8 @@ FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=yhoo&region=US&lang=en-US",
-    "https://www.marketwatch.com/rss/topstories",
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://cointelegraph.com/rss",
-    "https://www.coindesk.com/arc/outboundfeeds/rss/"
+    "https://news.google.com/rss/search?q=cryptocurrency",
+    "https://news.google.com/rss/search?q=ai+technology",
 ]
 
 # Prompt
@@ -79,7 +74,7 @@ Return JSON ONLY with:
   "confidence": 0-100,
   "reason": "...",
   "event_type": "earnings/m&a/macro/regulation/natural_disaster/other",
-  "sentiment": "bullish/bearish/neutral"
+  "sentiment": "positive/negative/neutral"
 }
 Return {} if no trade.
 """
@@ -158,19 +153,17 @@ def gemini_json(prompt: str) -> dict:
         if not content or not content.strip():
             print("Gemini returned empty content.")
             return {}
-        print(f"Gemini raw content:\n{content[:300]}...")
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError as e:
-                print(f"JSON decode error from Gemini: {e}")
-                return {}
+            return json.loads(match.group(0))
         else:
-            print("No JSON block found in Gemini response.")
+            print("No JSON found in Gemini response.")
             return {}
     except Exception as e:
-        print(f"Gemini API/network error: {e}")
+        if "429" in str(e):
+            print("⚠️ Gemini quota exhausted, skipping fallback.")
+            return {}
+        print(f"Gemini error: {e}")
         return {}
 
 def pos_size(conf):
@@ -231,7 +224,9 @@ def process():
         if seen(uid):
             continue
         mark_event(
-            uid, title, summary,
+            uid,
+            title,
+            summary,
             evt['confidence'],
             evt['direction'],
             evt['reason'],
@@ -239,12 +234,13 @@ def process():
             evt.get("sentiment", "neutral")
         )
         size = pos_size(evt['confidence'])
+        symbol = "✅" if evt['confidence'] >= 80 else "⚠️"
         msg = (
-            f"🔥 *Event Signal* ({evt['confidence']}%)\n"
+            f"{symbol} *Event Signal* ({evt['confidence']}%)\n"
             f"*Headline:* {title}\n"
             f"*Type:* {evt.get('event_type', 'other')}\n"
             f"*Direction:* {evt['direction']}\n"
-            f"*Sentiment:* {evt.get('sentiment', 'unknown')}\n"
+            f"*Sentiment:* {evt.get('sentiment', 'neutral')}\n"
             f"*Reason:* {evt['reason']}\n"
             f"*Size:* €{size}"
         )
@@ -258,7 +254,7 @@ def process():
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.7] running with sentiment tagging and Gemini JSON extraction")
+    print("[EventTrader v0.8] running with fallback Gemini and priority tagging")
     heartbeat_counter = 0
     while True:
         found = process()
