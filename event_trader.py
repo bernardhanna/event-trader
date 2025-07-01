@@ -1,3 +1,5 @@
+# event_trader.py
+
 import os
 import time
 import json
@@ -58,20 +60,12 @@ FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://cryptonews.com/news/feed",  # crypto
-    "https://www.defensenews.com/arc/outboundfeeds/rss/",  # defense
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=yhoo&region=US&lang=en-US",
+    "https://www.marketwatch.com/rss/topstories",
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://cointelegraph.com/rss",
+    "https://www.coindesk.com/arc/outboundfeeds/rss/"
 ]
-
-# Priority keywords
-PRIORITY_KEYWORDS = [
-    "flying taxi", "air mobility", "defense", "military", "cybersecurity",
-    "semiconductor", "ai", "artificial intelligence", "crypto", "bitcoin",
-    "ethereum", "blockchain", "nuclear", "conflict", "sanctions", "gaza",
-    "ukraine", "japan", "europe defense", "us defense"
-]
-
-# Contradictory signals tracker
-last_signals = {}
 
 # Prompt
 EVENT_PROMPT = """
@@ -79,12 +73,13 @@ You are a professional event-driven trading analyst.
 Given a HEADLINE and SUMMARY, decide if there is a trading opportunity.
 Return JSON ONLY with:
 {
-  "event": ...,
+  "event": "...",
   "assets_affected": [tickers],
   "direction": "long" or "short",
   "confidence": 0-100,
   "reason": "...",
-  "event_type": "earnings/m&a/macro/regulation/natural_disaster/other"
+  "event_type": "earnings/m&a/macro/regulation/natural_disaster/other",
+  "sentiment": "bullish/bearish/neutral"
 }
 Return {} if no trade.
 """
@@ -100,6 +95,7 @@ CREATE TABLE IF NOT EXISTS events (
     direction TEXT,
     reason TEXT,
     event_type TEXT,
+    sentiment TEXT,
     timestamp TEXT
 )
 """)
@@ -111,13 +107,13 @@ def sha(text):
 def seen(uid):
     return DB.execute("SELECT 1 FROM events WHERE id=?", (uid,)).fetchone() is not None
 
-def mark_event(uid, headline, summary, confidence, direction, reason, event_type):
+def mark_event(uid, headline, summary, confidence, direction, reason, event_type, sentiment):
     DB.execute("""
         INSERT INTO events
-        (id, headline, summary, confidence, direction, reason, event_type, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, headline, summary, confidence, direction, reason, event_type, sentiment, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        uid, headline, summary, confidence, direction, reason, event_type, dt.utcnow().isoformat()
+        uid, headline, summary, confidence, direction, reason, event_type, sentiment, dt.utcnow().isoformat()
     ))
     DB.commit()
 
@@ -225,10 +221,6 @@ def place_trade(ticker, direction, size_eur):
 def process():
     found = False
     for title, summary in fetch_news():
-        # priority keyword scan
-        if any(kw.lower() in title.lower() for kw in PRIORITY_KEYWORDS):
-            print(f"🚀 Priority keyword match found: {title}")
-
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
@@ -238,35 +230,25 @@ def process():
         uid = sha(title)
         if seen(uid):
             continue
-        mark_event(uid, title, summary, evt['confidence'], evt['direction'], evt['reason'], evt.get("event_type", "other"))
+        mark_event(
+            uid, title, summary,
+            evt['confidence'],
+            evt['direction'],
+            evt['reason'],
+            evt.get("event_type", "other"),
+            evt.get("sentiment", "neutral")
+        )
         size = pos_size(evt['confidence'])
         msg = (
             f"🔥 *Event Signal* ({evt['confidence']}%)\n"
             f"*Headline:* {title}\n"
             f"*Type:* {evt.get('event_type', 'other')}\n"
             f"*Direction:* {evt['direction']}\n"
+            f"*Sentiment:* {evt.get('sentiment', 'unknown')}\n"
             f"*Reason:* {evt['reason']}\n"
             f"*Size:* €{size}"
         )
         for asset in evt.get("assets_affected", []):
-            previous = last_signals.get(asset)
-            if previous:
-                time_since = dt.utcnow() - previous["timestamp"]
-                if previous["direction"] != evt["direction"] and time_since.total_seconds() < 86400:
-                    contradiction_msg = (
-                        f"⚠️ *Contradictory Signal Detected*\n"
-                        f"*Asset:* {asset}\n"
-                        f"Previous: {previous['direction']} ({previous['confidence']}%)\n"
-                        f"New: {evt['direction']} ({evt['confidence']}%)\n"
-                        f"Headline: {title}"
-                    )
-                    tg(contradiction_msg)
-                    print(contradiction_msg)
-            last_signals[asset] = {
-                "direction": evt["direction"],
-                "confidence": evt["confidence"],
-                "timestamp": dt.utcnow()
-            }
             msg += f"\n*Asset:* `{asset}`"
             if TRADE_ENABLED:
                 success, oid = place_trade(asset, evt['direction'], size)
@@ -276,7 +258,7 @@ def process():
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.7] running with contradictory signal detection + priority keywords")
+    print("[EventTrader v0.7] running with sentiment tagging and Gemini JSON extraction")
     heartbeat_counter = 0
     while True:
         found = process()
