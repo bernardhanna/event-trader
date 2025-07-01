@@ -58,9 +58,20 @@ FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://www.investing.com/rss/news_25.rss",
+    "https://cryptonews.com/news/feed",  # crypto
+    "https://www.defensenews.com/arc/outboundfeeds/rss/",  # defense
 ]
+
+# Priority keywords
+PRIORITY_KEYWORDS = [
+    "flying taxi", "air mobility", "defense", "military", "cybersecurity",
+    "semiconductor", "ai", "artificial intelligence", "crypto", "bitcoin",
+    "ethereum", "blockchain", "nuclear", "conflict", "sanctions", "gaza",
+    "ukraine", "japan", "europe defense", "us defense"
+]
+
+# Contradictory signals tracker
+last_signals = {}
 
 # Prompt
 EVENT_PROMPT = """
@@ -92,32 +103,13 @@ CREATE TABLE IF NOT EXISTS events (
     timestamp TEXT
 )
 """)
-DB.execute("""
-CREATE TABLE IF NOT EXISTS novelty (
-    keyword TEXT PRIMARY KEY,
-    timestamp TEXT
-)
-""")
 DB.commit()
-
-# Weak signals
-WEAK_TERMS = ["ongoing", "aftermath", "continued", "renewed clashes", "minor"]
 
 def sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 def seen(uid):
     return DB.execute("SELECT 1 FROM events WHERE id=?", (uid,)).fetchone() is not None
-
-def is_novel(keyword):
-    row = DB.execute("SELECT timestamp FROM novelty WHERE keyword=?", (keyword,)).fetchone()
-    if row:
-        ts = dt.fromisoformat(row[0])
-        if (dt.utcnow() - ts).total_seconds() < 86400:
-            return False
-    DB.execute("INSERT OR REPLACE INTO novelty (keyword, timestamp) VALUES (?, ?)", (keyword, dt.utcnow().isoformat()))
-    DB.commit()
-    return True
 
 def mark_event(uid, headline, summary, confidence, direction, reason, event_type):
     DB.execute("""
@@ -142,11 +134,6 @@ def fetch_news():
                     published_time = dt(*e.published_parsed[:6])
                 if (dt.utcnow() - published_time).total_seconds() > 3600:
                     continue
-                if any(weak in e.title.lower() for weak in WEAK_TERMS):
-                    continue
-                keyword = e.title.lower().split(" ")[0]
-                if not is_novel(keyword):
-                    continue
                 yield e.title, getattr(e, "summary", "")
         except Exception as e:
             print(f"Feed error: {e}")
@@ -170,16 +157,24 @@ def gemini_json(prompt: str) -> dict:
     if not gemini_model:
         return {}
     try:
-        response = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
+        response = gemini_model.generate_content(prompt)
         content = getattr(response, "text", None)
         if not content or not content.strip():
+            print("Gemini returned empty content.")
             return {}
+        print(f"Gemini raw content:\n{content[:300]}...")
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         if match:
-            return json.loads(match.group(0))
-        return {}
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error from Gemini: {e}")
+                return {}
+        else:
+            print("No JSON block found in Gemini response.")
+            return {}
     except Exception as e:
-        print(f"Gemini error: {e}")
+        print(f"Gemini API/network error: {e}")
         return {}
 
 def pos_size(conf):
@@ -230,6 +225,10 @@ def place_trade(ticker, direction, size_eur):
 def process():
     found = False
     for title, summary in fetch_news():
+        # priority keyword scan
+        if any(kw.lower() in title.lower() for kw in PRIORITY_KEYWORDS):
+            print(f"🚀 Priority keyword match found: {title}")
+
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
@@ -250,6 +249,24 @@ def process():
             f"*Size:* €{size}"
         )
         for asset in evt.get("assets_affected", []):
+            previous = last_signals.get(asset)
+            if previous:
+                time_since = dt.utcnow() - previous["timestamp"]
+                if previous["direction"] != evt["direction"] and time_since.total_seconds() < 86400:
+                    contradiction_msg = (
+                        f"⚠️ *Contradictory Signal Detected*\n"
+                        f"*Asset:* {asset}\n"
+                        f"Previous: {previous['direction']} ({previous['confidence']}%)\n"
+                        f"New: {evt['direction']} ({evt['confidence']}%)\n"
+                        f"Headline: {title}"
+                    )
+                    tg(contradiction_msg)
+                    print(contradiction_msg)
+            last_signals[asset] = {
+                "direction": evt["direction"],
+                "confidence": evt["confidence"],
+                "timestamp": dt.utcnow()
+            }
             msg += f"\n*Asset:* `{asset}`"
             if TRADE_ENABLED:
                 success, oid = place_trade(asset, evt['direction'], size)
@@ -259,7 +276,7 @@ def process():
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.7] running with recency + novelty + weak filter")
+    print("[EventTrader v0.7] running with contradictory signal detection + priority keywords")
     heartbeat_counter = 0
     while True:
         found = process()
