@@ -58,8 +58,9 @@ FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://news.google.com/rss/search?q=cryptocurrency",
-    "https://news.google.com/rss/search?q=ai+technology",
+    # crypto-specific
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://cointelegraph.com/rss"
 ]
 
 # Prompt
@@ -68,7 +69,7 @@ You are a professional event-driven trading analyst.
 Given a HEADLINE and SUMMARY, decide if there is a trading opportunity.
 Return JSON ONLY with:
 {
-  "event": "...",
+  "event": ...,
   "assets_affected": [tickers],
   "direction": "long" or "short",
   "confidence": 0-100,
@@ -78,6 +79,9 @@ Return JSON ONLY with:
 }
 Return {} if no trade.
 """
+
+# Crypto whitelist
+CRYPTO_WHITELIST = ["BTC", "ETH", "USDT", "SOL", "XRP"]
 
 # SQLite
 DB = sqlite3.connect("events.db", check_same_thread=False)
@@ -155,16 +159,31 @@ def gemini_json(prompt: str) -> dict:
             return {}
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         if match:
-            return json.loads(match.group(0))
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                print(f"JSON decode error from Gemini")
+                return {}
         else:
-            print("No JSON found in Gemini response.")
+            print("No JSON found from Gemini.")
             return {}
     except Exception as e:
-        if "429" in str(e):
-            print("⚠️ Gemini quota exhausted, skipping fallback.")
-            return {}
         print(f"Gemini error: {e}")
         return {}
+
+def validate_crypto(symbol):
+    if symbol.upper() in CRYPTO_WHITELIST:
+        return True
+    try:
+        r = requests.get(f"https://api.coingecko.com/api/v3/coins/markets",
+            params={"vs_currency":"usd","ids":symbol.lower()}, timeout=10)
+        if r.ok and r.json():
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(f"CoinGecko error validating {symbol}: {e}")
+        return False
 
 def pos_size(conf):
     w = (conf - CONF_THRESHOLD) / (100 - CONF_THRESHOLD)
@@ -223,38 +242,30 @@ def process():
         uid = sha(title)
         if seen(uid):
             continue
-        mark_event(
-            uid,
-            title,
-            summary,
-            evt['confidence'],
-            evt['direction'],
-            evt['reason'],
-            evt.get("event_type", "other"),
-            evt.get("sentiment", "neutral")
-        )
-        size = pos_size(evt['confidence'])
-        symbol = "✅" if evt['confidence'] >= 80 else "⚠️"
-        msg = (
-            f"{symbol} *Event Signal* ({evt['confidence']}%)\n"
-            f"*Headline:* {title}\n"
-            f"*Type:* {evt.get('event_type', 'other')}\n"
-            f"*Direction:* {evt['direction']}\n"
-            f"*Sentiment:* {evt.get('sentiment', 'neutral')}\n"
-            f"*Reason:* {evt['reason']}\n"
-            f"*Size:* €{size}"
-        )
+        sentiment = evt.get("sentiment", "neutral")
         for asset in evt.get("assets_affected", []):
-            msg += f"\n*Asset:* `{asset}`"
-            if TRADE_ENABLED:
-                success, oid = place_trade(asset, evt['direction'], size)
+            validated = validate_crypto(asset) if asset.upper() not in CRYPTO_WHITELIST else True
+            status = "✅ validated" if validated else "⚠️ not validated"
+            msg = (
+                f"🔥 *Event Signal* ({evt['confidence']}%)\n"
+                f"*Headline:* {title}\n"
+                f"*Type:* {evt.get('event_type', 'other')}\n"
+                f"*Direction:* {evt['direction']}\n"
+                f"*Sentiment:* {sentiment}\n"
+                f"*Reason:* {evt['reason']}\n"
+                f"*Size:* €{pos_size(evt['confidence'])}\n"
+                f"*Asset:* `{asset}` {status}"
+            )
+            if validated and TRADE_ENABLED:
+                success, oid = place_trade(asset, evt['direction'], pos_size(evt['confidence']))
                 msg += f"\nExec: {'✅' if success else '❌'}"
-        tg(msg)
+            tg(msg)
+        mark_event(uid, title, summary, evt['confidence'], evt['direction'], evt['reason'], evt.get("event_type", "other"), sentiment)
         found = True
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.8] running with fallback Gemini and priority tagging")
+    print("[EventTrader v0.9] running with crypto validation + priority tagging")
     heartbeat_counter = 0
     while True:
         found = process()
