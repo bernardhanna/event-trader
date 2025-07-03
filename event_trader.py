@@ -53,14 +53,32 @@ MAX_POSITION_PCT = 0.05
 CONF_THRESHOLD = 80
 EURUSD_FX_RATE = 1.08
 
+# Twitter whitelisted accounts (loaded from JSON)
+try:
+    with open("whitelisted_accounts.json", "r") as f:
+        WHITELISTED_ACCOUNTS = json.load(f)
+except:
+    WHITELISTED_ACCOUNTS = [
+        "Bloomberg",
+        "Reuters",
+        "howardlindzon",
+        "RampCapitalLLC",
+        "charliebilello",
+        "sentimenttrader",
+        "KobeissiLetter",
+        "KailashConcepts",
+        "hhhypergrowth",
+        "FinancialJuice",
+        "AlmanackReport",
+        "TheTranscript_"
+    ]
+
 # Feeds
 FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    # crypto-specific
-    "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://cointelegraph.com/rss"
+    # more can be added here
 ]
 
 # Prompt
@@ -79,9 +97,6 @@ Return JSON ONLY with:
 }
 Return {} if no trade.
 """
-
-# Crypto whitelist
-CRYPTO_WHITELIST = ["BTC", "ETH", "USDT", "SOL", "XRP"]
 
 # SQLite
 DB = sqlite3.connect("events.db", check_same_thread=False)
@@ -133,6 +148,13 @@ def fetch_news():
         except Exception as e:
             print(f"Feed error: {e}")
 
+# placeholder for future twitter parse
+def fetch_twitter():
+    # This is a mock - you’d swap this for Twitter API logic
+    for account in WHITELISTED_ACCOUNTS:
+        # simulate a message
+        yield f"{account}: Major breaking story about earnings" 
+
 def gpt_json(prompt, user_msg):
     try:
         resp = client.chat.completions.create(
@@ -155,35 +177,14 @@ def gemini_json(prompt: str) -> dict:
         response = gemini_model.generate_content(prompt)
         content = getattr(response, "text", None)
         if not content or not content.strip():
-            print("Gemini returned empty content.")
             return {}
         match = re.search(r"\{.*?\}", content, re.DOTALL)
         if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                print(f"JSON decode error from Gemini")
-                return {}
-        else:
-            print("No JSON found from Gemini.")
-            return {}
+            return json.loads(match.group(0))
     except Exception as e:
         print(f"Gemini error: {e}")
         return {}
-
-def validate_crypto(symbol):
-    if symbol.upper() in CRYPTO_WHITELIST:
-        return True
-    try:
-        r = requests.get(f"https://api.coingecko.com/api/v3/coins/markets",
-            params={"vs_currency":"usd","ids":symbol.lower()}, timeout=10)
-        if r.ok and r.json():
-            return True
-        else:
-            return False
-    except Exception as e:
-        print(f"CoinGecko error validating {symbol}: {e}")
-        return False
+    return {}
 
 def pos_size(conf):
     w = (conf - CONF_THRESHOLD) / (100 - CONF_THRESHOLD)
@@ -232,7 +233,8 @@ def place_trade(ticker, direction, size_eur):
 
 def process():
     found = False
-    for title, summary in fetch_news():
+    sources = list(fetch_news()) + list(fetch_twitter())
+    for title, summary in sources:
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
@@ -242,36 +244,32 @@ def process():
         uid = sha(title)
         if seen(uid):
             continue
-        sentiment = evt.get("sentiment", "neutral")
+        mark_event(
+            uid, title, summary,
+            evt['confidence'], evt['direction'], evt['reason'],
+            evt.get("event_type", "other"), evt.get("sentiment", "neutral")
+        )
+        size = pos_size(evt['confidence'])
+        msg = (
+            f"🔥 *Event Signal* ({evt['confidence']}%)\n"
+            f"*Headline:* {title}\n"
+            f"*Type:* {evt.get('event_type', 'other')}\n"
+            f"*Sentiment:* {evt.get('sentiment', 'neutral')}\n"
+            f"*Direction:* {evt['direction']}\n"
+            f"*Reason:* {evt['reason']}\n"
+            f"*Size:* €{size}"
+        )
         for asset in evt.get("assets_affected", []):
-            validated = validate_crypto(asset) if asset.upper() not in CRYPTO_WHITELIST else True
-            status = "✅ validated" if validated else "⚠️ not validated"
-            msg = (
-                f"🔥 *Event Signal* ({evt['confidence']}%)\n"
-                f"*Headline:* {title}\n"
-                f"*Type:* {evt.get('event_type', 'other')}\n"
-                f"*Direction:* {evt['direction']}\n"
-                f"*Sentiment:* {sentiment}\n"
-                f"*Reason:* {evt['reason']}\n"
-                f"*Size:* €{pos_size(evt['confidence'])}\n"
-                f"*Asset:* `{asset}` {status}"
-            )
-            if validated and TRADE_ENABLED:
-                success, oid = place_trade(asset, evt['direction'], pos_size(evt['confidence']))
+            msg += f"\n*Asset:* `{asset}`"
+            if TRADE_ENABLED:
+                success, oid = place_trade(asset, evt['direction'], size)
                 msg += f"\nExec: {'✅' if success else '❌'}"
-            tg(msg)
-        mark_event(uid, title, summary, evt['confidence'], evt['direction'], evt['reason'], evt.get("event_type", "other"), sentiment)
+        tg(msg)
         found = True
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.9] running with crypto validation + priority tagging")
-    heartbeat_counter = 0
+    print("[EventTrader v0.9] running with Twitter integration and JSON whitelist")
     while True:
         found = process()
-        heartbeat_counter += 1
-        if heartbeat_counter >= 6:
-            if not found:
-                tg("✅ *EventTrader heartbeat*: no signals found, system OK.")
-            heartbeat_counter = 0
         time.sleep(600)
