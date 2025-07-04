@@ -53,24 +53,16 @@ MAX_POSITION_PCT = 0.05
 CONF_THRESHOLD = 80
 EURUSD_FX_RATE = 1.08
 
-# Twitter whitelisted accounts (loaded from JSON)
+# Whitelisted Twitter handles
 try:
     with open("whitelisted_accounts.json", "r") as f:
         WHITELISTED_ACCOUNTS = json.load(f)
 except:
     WHITELISTED_ACCOUNTS = [
-        "Bloomberg",
-        "Reuters",
-        "howardlindzon",
-        "RampCapitalLLC",
-        "charliebilello",
-        "sentimenttrader",
-        "KobeissiLetter",
-        "KailashConcepts",
-        "hhhypergrowth",
-        "FinancialJuice",
-        "AlmanackReport",
-        "TheTranscript_"
+        "Bloomberg", "Reuters", "howardlindzon", "RampCapitalLLC",
+        "charliebilello", "sentimenttrader", "KobeissiLetter",
+        "KailashConcepts", "hhhypergrowth", "FinancialJuice",
+        "AlmanackReport", "TheTranscript_"
     ]
 
 # Feeds
@@ -78,7 +70,6 @@ FEEDS = [
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    # more can be added here
 ]
 
 # Prompt
@@ -148,12 +139,10 @@ def fetch_news():
         except Exception as e:
             print(f"Feed error: {e}")
 
-# placeholder for future twitter parse
+# placeholder
 def fetch_twitter():
-    # This is a mock - you’d swap this for Twitter API logic
     for account in WHITELISTED_ACCOUNTS:
-        # simulate a message
-        yield f"{account}: Major breaking story about earnings" 
+        yield f"{account}: Breaking news"
 
 def gpt_json(prompt, user_msg):
     try:
@@ -234,7 +223,11 @@ def place_trade(ticker, direction, size_eur):
 def process():
     found = False
     sources = list(fetch_news()) + list(fetch_twitter())
-    for title, summary in sources:
+    for item in sources:
+        if isinstance(item, tuple):
+            title, summary = item
+        else:
+            title, summary = item, ""
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
@@ -269,7 +262,7 @@ def process():
     return found
 
 if __name__ == "__main__":
-    print("[EventTrader v0.9] running with Twitter integration and JSON whitelist")
+    print("[EventTrader v0.9] running with Twitter + JSON whitelist + Gemini fallback")
     while True:
         found = process()
         time.sleep(600)
