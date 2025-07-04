@@ -1,38 +1,35 @@
 from event_trader import mark_event, pos_size, place_trade, tg, sha
 
-test_evt = {
-    "event": "Test Event",
-    "assets_affected": ["AAPL"],
-    "direction": "short",
-    "confidence": 95,
-    "reason": "Testing manual injection",
-    "event_type": "other"
-}
+# define a test headline and summary
+headline = "Test Signal: Apple announces $10B share buyback"
+summary = "Apple will buy back $10 billion of its stock this quarter, citing strong cash reserves and positive future outlook."
 
-# Mark the event in the DB/log
+# make a fake event ID
+uid = sha(headline)
+
+# store the event
 mark_event(
-    sha("Manual Test"),   # consistent event ID
-    "Manual Test",
-    "Testing summary",
-    test_evt['confidence'],
-    test_evt['direction'],
-    test_evt['reason'],
-    test_evt['event_type']
+    uid,
+    headline,
+    summary,
+    90,              # confidence
+    "long",          # direction
+    "Strong buyback supports share price",  # reason
+    "m&a",           # event_type
+    "positive"       # sentiment
 )
 
-# Calculate size
-size = pos_size(test_evt["confidence"])
+# size calculation
+size = pos_size(90)
 
-# Actually place the trade
-place_trade("AAPL", "short", size)
+# simulate placing the trade
+success, oid = place_trade("AAPL", "long", size)
 
-# Notify Telegram
+# log to telegram
 tg(
-    f"🔥 *Event Signal* ({test_evt['confidence']}%)\n"
-    f"*Headline:* Manual Test\n"
-    f"*Direction:* short\n"
-    f"*Reason:* Testing manual injection\n"
-    f"*Position size:* €{size}\n"
-    f"*Asset:* `AAPL`\n"
-    f"Exec: ✅"
+    f"✅ Test Signal:\n"
+    f"Headline: {headline}\n"
+    f"Direction: long\n"
+    f"Size: €{size}\n"
+    f"Exec: {'✅' if success else '❌'}"
 )
