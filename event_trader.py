@@ -54,7 +54,7 @@ else:
 # Config
 TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
-CONF_THRESHOLD = 70  # lowered to 70
+CONF_THRESHOLD = 60  # lowered to 70
 EURUSD_FX_RATE = 1.08
 
 # Whitelisted Twitter handles
