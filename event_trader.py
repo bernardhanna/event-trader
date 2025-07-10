@@ -20,7 +20,8 @@ try:
     import alpaca_trade_api as trade_api
 except ImportError:
     trade_api = None
-
+import time
+headline = f"Test Signal: Apple announces $10B share buyback ({int(time.time())})"
 # Load .env
 load_dotenv()
 
@@ -210,7 +211,7 @@ def seen(uid):
 
 def mark_event(uid, headline, summary, confidence, direction, reason, event_type, sentiment):
     DB.execute("""
-        INSERT INTO events
+        INSERT OR REPLACE INTO events
         (id, headline, summary, confidence, direction, reason, event_type, sentiment, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
