@@ -54,6 +54,7 @@ TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
 CONF_THRESHOLD = 60
 EURUSD_FX_RATE = 1.08
+NEWS_MAX_AGE_HOURS = int(os.getenv("NEWS_MAX_AGE_HOURS", "12"))
 
 try:
     with open("whitelisted_accounts.json", "r") as f:
@@ -142,7 +143,7 @@ def fetch_news():
                         print(f"[{url}] Date parse failed: {e.published} ({ex})")
                         continue
                     now = dt.utcnow().replace(tzinfo=pytz.UTC)
-                    if (now - published).total_seconds() > 6 * 3600:
+                    if (now - published).total_seconds() > NEWS_MAX_AGE_HOURS * 3600:
                         continue
                 yield e.title, getattr(e, "summary", "")
         except Exception as e:
