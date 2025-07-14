@@ -140,6 +140,7 @@ def fetch_news():
                         print(f"[{url}] Date parse failed: {e.published} ({ex})")
                         continue
                     now = dt.utcnow().replace(tzinfo=pytz.UTC)
+                    print(f"[News Skipped] {e.title} | Age: {(now - published).total_seconds() / 3600:.1f} hours")
                     if (now - published).total_seconds() > NEWS_MAX_AGE_HOURS * 3600:
                         print(f"[{url}] Rejected due to age: {e.title}")
                         continue
