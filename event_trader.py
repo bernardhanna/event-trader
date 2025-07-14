@@ -1,11 +1,10 @@
 import os
+import feedparser
 import time
 import json
 import re
 import hashlib
 import sqlite3
-import feedparser
-import email.utils
 import pytz
 import requests
 from datetime import datetime as dt
@@ -24,8 +23,6 @@ except ImportError:
 
 feedparser.USER_AGENT = "Mozilla/5.0 (compatible; EventTraderBot/1.0; +http://159.65.201.126)"
 
-headline = f"Test Signal: Apple announces $10B share buyback ({int(time.time())})"
-
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -39,9 +36,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
-
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
-
 ALPACA_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
 ALPACA_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
@@ -54,7 +49,7 @@ else:
 
 TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
-CONF_THRESHOLD = 60
+CONF_THRESHOLD = 50
 EURUSD_FX_RATE = 1.08
 NEWS_MAX_AGE_HOURS = int(os.getenv("NEWS_MAX_AGE_HOURS", "12"))
 
@@ -71,11 +66,11 @@ except:
     FEEDS = []
 
 EVENT_PROMPT = """
-You are a professional event-driven trading analyst.
-Given a HEADLINE and SUMMARY, decide if there is a trading opportunity.
-Return JSON ONLY with:
+You are an aggressive event-driven trading analyst seeking asymmetric opportunities.
+Given a HEADLINE and SUMMARY, identify even weak signals worth exploring.
+Return only JSON with:
 {
-  "event": ..., 
+  "event": ...,
   "assets_affected": [tickers],
   "direction": "long" or "short",
   "confidence": 0-100,
@@ -83,7 +78,7 @@ Return JSON ONLY with:
   "event_type": "earnings/m&a/macro/regulation/natural_disaster/other",
   "sentiment": "positive/negative/neutral"
 }
-Return {} if no trade.
+Return {} only if completely irrelevant or spam.
 """
 
 DB = sqlite3.connect("events.db", check_same_thread=False)
@@ -146,6 +141,7 @@ def fetch_news():
                         continue
                     now = dt.utcnow().replace(tzinfo=pytz.UTC)
                     if (now - published).total_seconds() > NEWS_MAX_AGE_HOURS * 3600:
+                        print(f"[{url}] Rejected due to age: {e.title}")
                         continue
                 yield e.title, getattr(e, "summary", "")
         except Exception as e:
@@ -283,11 +279,14 @@ def process():
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
+            print(f"Rejected by GPT or below threshold: {title}")
             evt = gemini_json(f"{EVENT_PROMPT}\n\n{user_msg}")
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
+            print(f"Rejected by Gemini or below threshold: {title}")
             continue
         uid = sha(title)
         if seen(uid):
+            print(f"Duplicate ignored: {title}")
             continue
         mark_event(
             uid, title, summary,
