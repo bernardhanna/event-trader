@@ -5,6 +5,7 @@ import json
 import re
 import hashlib
 import sqlite3
+import email.utils
 import pytz
 import requests
 from datetime import datetime as dt
@@ -37,6 +38,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
+
 ALPACA_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
 ALPACA_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
@@ -49,7 +51,7 @@ else:
 
 TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
-CONF_THRESHOLD = 50
+CONF_THRESHOLD = 30
 EURUSD_FX_RATE = 1.08
 NEWS_MAX_AGE_HOURS = int(os.getenv("NEWS_MAX_AGE_HOURS", "12"))
 
@@ -66,19 +68,21 @@ except:
     FEEDS = []
 
 EVENT_PROMPT = """
-You are an aggressive event-driven trading analyst seeking asymmetric opportunities.
-Given a HEADLINE and SUMMARY, identify even weak signals worth exploring.
-Return only JSON with:
+You are a market analyst specializing in event-driven trading.
+Given the HEADLINE and SUMMARY, evaluate if there is a viable trading opportunity.
+Be as sensitive as possible to potential catalysts.
+
+Return only valid JSON:
 {
-  "event": ...,
-  "assets_affected": [tickers],
+  "event": "...",
+  "assets_affected": [...],
   "direction": "long" or "short",
   "confidence": 0-100,
   "reason": "...",
-  "event_type": "earnings/m&a/macro/regulation/natural_disaster/other",
+  "event_type": "...",
   "sentiment": "positive/negative/neutral"
 }
-Return {} only if completely irrelevant or spam.
+Return {} if no trade opportunity.
 """
 
 DB = sqlite3.connect("events.db", check_same_thread=False)
@@ -115,14 +119,10 @@ def mark_event(uid, headline, summary, confidence, direction, reason, event_type
 
 def fetch_news():
     tzinfos = {
-        "PDT": gettz("US/Pacific"),
-        "PST": gettz("US/Pacific"),
-        "EDT": gettz("US/Eastern"),
-        "EST": gettz("US/Eastern"),
-        "CDT": gettz("US/Central"),
-        "CST": gettz("US/Central"),
-        "MDT": gettz("US/Mountain"),
-        "MST": gettz("US/Mountain")
+        "PDT": gettz("US/Pacific"), "PST": gettz("US/Pacific"),
+        "EDT": gettz("US/Eastern"), "EST": gettz("US/Eastern"),
+        "CDT": gettz("US/Central"), "CST": gettz("US/Central"),
+        "MDT": gettz("US/Mountain"), "MST": gettz("US/Mountain")
     }
     for url in FEEDS:
         try:
@@ -140,9 +140,9 @@ def fetch_news():
                         print(f"[{url}] Date parse failed: {e.published} ({ex})")
                         continue
                     now = dt.utcnow().replace(tzinfo=pytz.UTC)
-                    print(f"[News Skipped] {e.title} | Age: {(now - published).total_seconds() / 3600:.1f} hours")
-                    if (now - published).total_seconds() > NEWS_MAX_AGE_HOURS * 3600:
-                        print(f"[{url}] Rejected due to age: {e.title}")
+                    age = (now - published).total_seconds() / 3600
+                    if age > NEWS_MAX_AGE_HOURS:
+                        print(f"[News Skipped] {e.title} | Age: {age:.1f} hours")
                         continue
                 yield e.title, getattr(e, "summary", "")
         except Exception as e:
@@ -154,12 +154,9 @@ def fetch_twitter():
     headers = {"Authorization": f"Bearer {TWITTER_BEARER_TOKEN}"}
     session = requests.Session()
     try:
-        resp = session.get(
-            "https://api.twitter.com/2/users/by",
-            params={"usernames": ",".join(WHITELISTED_ACCOUNTS)},
-            headers=headers,
-            timeout=10,
-        )
+        resp = session.get("https://api.twitter.com/2/users/by",
+                           params={"usernames": ",".join(WHITELISTED_ACCOUNTS)},
+                           headers=headers, timeout=10)
         if not resp.ok:
             print(f"[Twitter] lookup error {resp.status_code}: {resp.text}")
             return
@@ -173,12 +170,9 @@ def fetch_twitter():
         if not uid:
             continue
         try:
-            r = session.get(
-                f"https://api.twitter.com/2/users/{uid}/tweets",
-                params={"max_results": 5, "tweet.fields": "created_at"},
-                headers=headers,
-                timeout=10,
-            )
+            r = session.get(f"https://api.twitter.com/2/users/{uid}/tweets",
+                            params={"max_results": 5, "tweet.fields": "created_at"},
+                            headers=headers, timeout=10)
             if r.status_code == 429:
                 reset = int(r.headers.get("x-rate-limit-reset", time.time() + 60))
                 wait = max(30, reset - int(time.time()))
@@ -280,14 +274,13 @@ def process():
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
-            print(f"Rejected by GPT or below threshold: {title}")
+            print(f"[Rejected by GPT] {title} | Conf: {evt.get('confidence', 0) if evt else 'None'}")
             evt = gemini_json(f"{EVENT_PROMPT}\n\n{user_msg}")
-        if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
-            print(f"Rejected by Gemini or below threshold: {title}")
-            continue
+            if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
+                print(f"[Rejected by Gemini] {title} | Conf: {evt.get('confidence', 0) if evt else 'None'}")
+                continue
         uid = sha(title)
         if seen(uid):
-            print(f"Duplicate ignored: {title}")
             continue
         mark_event(
             uid, title, summary,
