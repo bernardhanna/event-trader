@@ -51,5 +51,9 @@ you approve signals and review performance.
 `feeds.json` holds the RSS feeds used for news scanning. Customize the list as
 needed. `whitelisted_accounts.json` contains Twitter accounts that are deemed
 trustworthy. Set `NEWS_MAX_AGE_HOURS` to control how far back the bot will look
-for headlines. It defaults to **12** hours.
+for headlines. It defaults to **12** hours.### Twitter Access
+
+To pull tweets from the accounts listed in `whitelisted_accounts.json`, create a
+Twitter/X developer application and generate a **Bearer Token**. Export this as
+`TWITTER_BEARER_TOKEN` in your environment before running the bot.
 
