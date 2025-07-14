@@ -272,4 +272,6 @@ if __name__ == "__main__":
     print("[EventTrader v0.9] running with Twitter + JSON whitelist + Gemini fallback")
     while True:
         found = process()
+        if not found:
+            tg("Heartbeat: no trades generated")
         time.sleep(600)
