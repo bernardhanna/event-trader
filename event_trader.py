@@ -40,6 +40,8 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
 
+TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
+
 ALPACA_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET_KEY")
 ALPACA_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
@@ -150,8 +152,51 @@ def fetch_news():
             print(f"[{url}] Feed error: {e}")
 
 def fetch_twitter():
-    for account in WHITELISTED_ACCOUNTS:
-        yield f"{account}: Breaking news"
+    if not TWITTER_BEARER_TOKEN or not WHITELISTED_ACCOUNTS:
+        return
+    headers = {"Authorization": f"Bearer {TWITTER_BEARER_TOKEN}"}
+    session = requests.Session()
+    try:
+        resp = session.get(
+            "https://api.twitter.com/2/users/by",
+            params={"usernames": ",".join(WHITELISTED_ACCOUNTS)},
+            headers=headers,
+            timeout=10,
+        )
+        if not resp.ok:
+            print(f"[Twitter] lookup error {resp.status_code}: {resp.text}")
+            return
+        users = resp.json().get("data", [])
+    except Exception as ex:
+        print(f"[Twitter] lookup failed: {ex}")
+        return
+    for user in users:
+        uid = user.get("id")
+        uname = user.get("username")
+        if not uid:
+            continue
+        try:
+            r = session.get(
+                f"https://api.twitter.com/2/users/{uid}/tweets",
+                params={"max_results": 5, "tweet.fields": "created_at"},
+                headers=headers,
+                timeout=10,
+            )
+            if r.status_code == 429:
+                reset = int(r.headers.get("x-rate-limit-reset", time.time() + 60))
+                wait = max(30, reset - int(time.time()))
+                print(f"[Twitter] rate limited, sleeping {wait}s")
+                time.sleep(wait)
+                continue
+            if not r.ok:
+                print(f"[Twitter] tweets error {uname} {r.status_code}: {r.text}")
+                continue
+            for tw in r.json().get("data", []):
+                text = tw.get("text", "").replace("\n", " ")
+                yield f"{uname}: {text}", ""
+        except Exception as ex:
+            print(f"[Twitter] error for {uname}: {ex}")
+        time.sleep(1)
 
 def gpt_json(prompt, user_msg):
     try:
