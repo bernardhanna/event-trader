@@ -68,21 +68,19 @@ except:
     FEEDS = []
 
 EVENT_PROMPT = """
-You are a market analyst specializing in event-driven trading.
-Given the HEADLINE and SUMMARY, evaluate if there is a viable trading opportunity.
-Be as sensitive as possible to potential catalysts.
+You are a trading analyst tasked with catching every possible event-driven opportunity — even borderline cases. Be permissive. If there's a plausible case for market movement based on the HEADLINE and SUMMARY, include a trade idea.
 
-Return only valid JSON:
+Return JSON ONLY like:
 {
   "event": "...",
-  "assets_affected": [...],
+  "assets_affected": [tickers],
   "direction": "long" or "short",
   "confidence": 0-100,
   "reason": "...",
-  "event_type": "...",
+  "event_type": "earnings/m&a/macro/regulation/natural_disaster/other",
   "sentiment": "positive/negative/neutral"
 }
-Return {} if no trade opportunity.
+Return {} ONLY if the event clearly has no market impact.
 """
 
 DB = sqlite3.connect("events.db", check_same_thread=False)
