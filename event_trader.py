@@ -53,7 +53,19 @@ TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
 CONF_THRESHOLD = 30
 EURUSD_FX_RATE = 1.08
-NEWS_MAX_AGE_HOURS = int(os.getenv("NEWS_MAX_AGE_HOURS", "12"))
+NEWS_MAX_AGE_HOURS = os.getenv("NEWS_MAX_AGE_HOURS")
+
+# Debugging
+print(f"NEWS_MAX_AGE_HOURS from environment: {os.getenv('NEWS_MAX_AGE_HOURS')}")
+
+
+# Get the value for NEWS_MAX_AGE_HOURS from the environment variable
+NEWS_MAX_AGE_HOURS = os.getenv("NEWS_MAX_AGE_HOURS")
+if NEWS_MAX_AGE_HOURS is None:
+    raise ValueError("NEWS_MAX_AGE_HOURS is not set in the .env file")
+
+NEWS_MAX_AGE_HOURS = int(NEWS_MAX_AGE_HOURS)  # Convert the value to integer
+print(f"NEWS_MAX_AGE_HOURS set to: {NEWS_MAX_AGE_HOURS}")
 
 try:
     with open("whitelisted_accounts.json", "r") as f:
@@ -139,9 +151,12 @@ def fetch_news():
                         continue
                     now = dt.utcnow().replace(tzinfo=pytz.UTC)
                     age = (now - published).total_seconds() / 3600
-                    if age > NEWS_MAX_AGE_HOURS:
-                        print(f"[News Skipped] {e.title} | Age: {age:.1f} hours")
-                        continue
+                    if age <= NEWS_MAX_AGE_HOURS:  # Only process news within the age limit
+                        print(f"[News Processed] {e.title} | Age: {age:.1f} hours")  # Log events that are processed
+                        yield e.title, getattr(e, "summary", "")
+                    else:
+                        print(f"[News Skipped] {e.title} | Age: {age:.1f} hours")  # Log events that are skipped
+
                 yield e.title, getattr(e, "summary", "")
         except Exception as e:
             print(f"[{url}] Feed error: {e}")
@@ -270,6 +285,9 @@ def process():
     for item in sources:
         title, summary = item if isinstance(item, tuple) else (item, "")
         user_msg = f"HEADLINE: {title}\nSUMMARY: {summary}"
+
+        print(f"[Debug] Processing: {title}")  # Debug log
+
         evt = gpt_json(EVENT_PROMPT, user_msg)
         if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
             print(f"[Rejected by GPT] {title} | Conf: {evt.get('confidence', 0) if evt else 'None'}")
@@ -277,6 +295,10 @@ def process():
             if not evt or evt.get("confidence", 0) < CONF_THRESHOLD:
                 print(f"[Rejected by Gemini] {title} | Conf: {evt.get('confidence', 0) if evt else 'None'}")
                 continue
+        
+        # More detailed debug info for the event
+        print(f"[Debug] Event: {evt}")
+        
         uid = sha(title)
         if seen(uid):
             continue
