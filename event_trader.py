@@ -5,17 +5,13 @@ import re
 import hashlib
 import sqlite3
 import feedparser
-
-# set a custom user agent for feedparser
-feedparser.USER_AGENT = "Mozilla/5.0 (compatible; EventTraderBot/1.0; +http://159.65.201.126)"
-
 import requests
 from datetime import datetime as dt
 from decimal import Decimal, ROUND_DOWN
 from dotenv import load_dotenv
 from openai import OpenAI
 import google.generativeai as genai
-from trader_feeds import fetch_trader_news
+
 try:
     import alpaca_trade_api as trade_api
 except ImportError:
@@ -54,7 +50,7 @@ else:
 # Config
 TOTAL_CAPITAL_EUR = 1000
 MAX_POSITION_PCT = 0.05
-CONF_THRESHOLD = 70  # lowered to 70
+CONF_THRESHOLD = 80
 EURUSD_FX_RATE = 1.08
 
 # Whitelisted Twitter handles
@@ -69,103 +65,11 @@ except:
         "AlmanackReport", "TheTranscript_"
     ]
 
-# Feeds (100+ entries from major sources)
+# Feeds
 FEEDS = [
- "https://feeds.reuters.com/reuters/businessNews",
-    "https://feeds.reuters.com/reuters/marketsNews",
-    "https://feeds.bbci.co.uk/news/business/rss.xml",
-    "https://www.marketwatch.com/rss/topstories",
-    "https://www.marketwatch.com/rss/marketpulse",
-    "https://finance.yahoo.com/news/rssindex",
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://www.ft.com/?format=rss",
-    "https://www.investing.com/rss/news_285.rss",
-    "https://www.investing.com/rss/news_25.rss",
-    "https://www.bloomberg.com/feed/podcast/etf-report.xml",
-    "https://www.bloomberg.com/feed/podcast/bloomberg-surveillance.xml",
-    "https://www.benzinga.com/rss",
-    "https://seekingalpha.com/feed.xml",
-    "https://www.zerohedge.com/fullrss2.xml",
-    "https://www.wsj.com/xml/rss/3_7031.xml",
-    "https://www.fool.com/feeds/index.aspx",
-    "https://www.valuewalk.com/feed/",
-    "https://news.tradingeconomics.com/rss",
-    "https://www.businessinsider.com/rss",
-    "https://www.cnet.com/rss/news/",
-    "https://www.theverge.com/rss/index.xml",
-    "https://www.wired.com/feed/rss",
-    "https://www.techcrunch.com/feed/",
-    "https://arstechnica.com/feed/",
-    "https://www.engadget.com/rss.xml",
-    "https://venturebeat.com/feed/",
-    "https://gizmodo.com/rss",
-    "https://thenextweb.com/feed/",
-    "https://www.androidcentral.com/rss.xml",
-    "https://www.macrumors.com/macrumors.xml",
-    "https://9to5mac.com/feed/",
-    "https://www.reddit.com/r/technology/.rss",
-    "https://oilprice.com/rss/main",
-    "https://www.energyvoice.com/feed/",
-    "https://www.rigzone.com/news/rss/",
-    "https://www.worldoil.com/rss",
-    "https://www.offshore-mag.com/rss",
     "https://feeds.reuters.com/reuters/worldNews",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://www.npr.org/rss/rss.php?id=1004",
-    "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-    "https://apnews.com/rss",
-    "https://globalnews.ca/feed/",
-    "https://www.dw.com/en/top-stories/s-9097?maca=en-rss-en-all-1573-rdf",
-    "https://www.france24.com/en/rss",
-    "https://english.alarabiya.net/.mrss/en/rss.xml",
-    "https://www.abc.net.au/news/feed/51120/rss.xml",
-    "https://www.politico.com/rss/politics08.xml",
-    "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",
-    "https://www.realclearpolitics.com/index.xml",
-    "https://thehill.com/rss/syndicator/19110",
-    "https://www.cnn.com/rss/cnn_allpolitics.rss",
-    "https://www.npr.org/rss/rss.php?id=1014",
-    "https://www.usnews.com/rss/news",
-    "https://www.nbcnews.com/politics/politics-news/rss.xml",
-    "https://www.federalreserve.gov/feeds/press_all.xml",
-    "https://www.oecd.org/newsroom/newsroom-rss.xml",
-    "https://www.imf.org/en/News/Articles/rss",
-    "https://www.bis.org/rss/rss.xml",
-    "https://www.ecb.europa.eu/rss/press.html",
-    "https://www.bankofengland.co.uk/rss/rss.xml",
-    "https://www.bls.gov/feed/bls_latest.rss",
-    "https://www.bea.gov/rss/newsreleases.xml",
-    "https://www.tradingview.com/feed/",
-    "https://www.forexlive.com/feed",
-    "https://www.dailyfx.com/feeds/all",
-    "https://www.fxstreet.com/rss/news",
-    "https://asia.nikkei.com/rss/feed/nar",
-    "https://www.scmp.com/rss/91/feed",
-    "https://www.channelnewsasia.com/rssfeeds/8395986",
-    "https://www.japantimes.co.jp/feed/",
-    "https://thediplomat.com/feed/",
-    "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://cointelegraph.com/rss",
-    "https://cryptonews.com/news/feed",
-    "https://news.bitcoin.com/feed/",
-    "https://decrypt.co/feed",
-    "https://blockworks.co/feed",
-    "https://www.forbes.com/most-popular/feed/",
-    "https://www.economist.com/finance-and-economics/rss.xml",
-    "https://hbr.org/rss",
-    "https://time.com/feed/",
-    "https://www.fastcompany.com/rss",
-    "https://qz.com/feed",
-    "https://www.inc.com/rss.xml",
-    "https://www.theatlantic.com/feed/all/",
-    "https://www.newyorker.com/feed/news",
-    "https://www.vox.com/rss/index.xml",
-    "https://www.nasdaq.com/feed/rssoutbound",
-    "https://www.wsj.com/xml/rss/3_7085.xml",
-    "https://money.cnn.com/rss/magazines_fortune.xml",
-    "https://www.cfr.org/rss.xml",
-    "https://www.project-syndicate.org/feeds/rss"
 ]
 
 # Prompt
@@ -229,12 +133,13 @@ def fetch_news():
                 published_time = dt.utcnow()
                 if hasattr(e, "published_parsed") and e.published_parsed:
                     published_time = dt(*e.published_parsed[:6])
-                if (dt.utcnow() - published_time).total_seconds() > 7200:
+                if (dt.utcnow() - published_time).total_seconds() > 3600:
                     continue
                 yield e.title, getattr(e, "summary", "")
         except Exception as e:
             print(f"Feed error: {e}")
 
+# placeholder
 def fetch_twitter():
     for account in WHITELISTED_ACCOUNTS:
         yield f"{account}: Breaking news"
@@ -317,7 +222,7 @@ def place_trade(ticker, direction, size_eur):
 
 def process():
     found = False
-    sources = list(fetch_news()) + list(fetch_twitter()) + [(s["title"], s["summary"]) for s in fetch_trader_news()]
+    sources = list(fetch_news()) + list(fetch_twitter())
     for item in sources:
         if isinstance(item, tuple):
             title, summary = item
